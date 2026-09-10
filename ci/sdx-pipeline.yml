@@ -1,0 +1,170 @@
+# SDX platform upgrade pipeline: runs only when UPGRADE_TARGET == "sdx".
+#
+# Devices are grouped into waves (canary -> DR -> production). Each wave
+# runs its prechecks and upgrade across all its SDX appliances in parallel
+# (parallel:matrix), then postchecks + compares those results against the
+# prechecks. A wave only starts once the previous wave's postcheck/compare
+# job has *passed* (stage ordering enforces this automatically - a failed
+# job blocks every later stage) and a human has clicked the manual
+# "promote" gate job for that wave.
+#
+# Device lists below must stay in sync with config/waves.sdx.yml (the
+# human-readable inventory reference) - GitLab `parallel:matrix` values
+# must be static at pipeline-compile time, so they cannot be read from an
+# external file without a dynamic child-pipeline generator. See
+# docs/PIPELINE.md if the fleet grows large enough to justify adding one.
+
+.sdx_wave1_devices: &sdx_wave1_devices
+  - DEVICE_NAME: sdx-lab-01
+    MGMT_IP: "10.10.1.11"
+  - DEVICE_NAME: sdx-lab-02
+    MGMT_IP: "10.10.1.12"
+
+.sdx_wave2_devices: &sdx_wave2_devices
+  - DEVICE_NAME: sdx-dr-01
+    MGMT_IP: "10.20.1.11"
+
+.sdx_wave3_devices: &sdx_wave3_devices
+  - DEVICE_NAME: sdx-prod-01
+    MGMT_IP: "10.30.1.11"
+  - DEVICE_NAME: sdx-prod-02
+    MGMT_IP: "10.30.1.12"
+
+.sdx_base:
+  extends: .base
+  rules:
+    - if: '$UPGRADE_TARGET == "sdx"'
+  variables:
+    PLATFORM: "sdx"
+
+.sdx_precheck_job:
+  extends: .sdx_base
+  script:
+    - scripts/common/precheck.sh pre
+  artifacts:
+    paths:
+      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
+
+.sdx_upgrade_job:
+  extends: .sdx_base
+  cache:
+    key: "firmware-${CI_PIPELINE_ID}"
+    paths: [firmware/]
+    policy: pull
+  script:
+    - scripts/sdx/upload_firmware.sh firmware/build.tgz
+    - scripts/sdx/trigger_upgrade.sh
+  artifacts:
+    paths:
+      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
+
+.sdx_postcheck_job:
+  extends: .sdx_base
+  script:
+    - |
+      set +e
+      scripts/common/precheck.sh post
+      POST_RC=$?
+      scripts/common/compare_checks.sh
+      COMPARE_RC=$?
+      set -e
+      echo "postcheck rc=${POST_RC} compare rc=${COMPARE_RC}"
+      [ "$POST_RC" -eq 0 ] && [ "$COMPARE_RC" -eq 0 ]
+  artifacts:
+    paths:
+      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
+
+.sdx_promote_job:
+  extends: .sdx_base
+  when: manual
+  allow_failure: false
+  script:
+    - echo "Promoting to the next SDX wave."
+
+sdx:validate:
+  extends: .sdx_base
+  stage: validate
+  script:
+    - test -f config/waves.sdx.yml
+    - scripts/lib/validate_env.sh sdx
+
+sdx:fetch-firmware:
+  extends: .sdx_base
+  stage: fetch-firmware
+  cache:
+    key: "firmware-${CI_PIPELINE_ID}"
+    paths: [firmware/]
+    policy: push
+  script:
+    - mkdir -p firmware
+    - scripts/firmware/fetch_firmware.sh firmware/build.tgz
+    - scripts/firmware/verify_checksum.sh firmware/build.tgz "${EXPECTED_SHA256:-}"
+  artifacts:
+    expire_in: "7 days"
+    paths:
+      - firmware/build.tgz.sha256
+
+# ---- Wave 1: lab/canary ----
+sdx:wave1:precheck:
+  extends: .sdx_precheck_job
+  stage: sdx-wave1-precheck
+  parallel:
+    matrix: *sdx_wave1_devices
+
+sdx:wave1:upgrade:
+  extends: .sdx_upgrade_job
+  stage: sdx-wave1-upgrade
+  parallel:
+    matrix: *sdx_wave1_devices
+
+sdx:wave1:postcheck:
+  extends: .sdx_postcheck_job
+  stage: sdx-wave1-postcheck
+  parallel:
+    matrix: *sdx_wave1_devices
+
+sdx:wave1:promote:
+  extends: .sdx_promote_job
+  stage: sdx-wave1-gate
+
+# ---- Wave 2: DR site ----
+sdx:wave2:precheck:
+  extends: .sdx_precheck_job
+  stage: sdx-wave2-precheck
+  parallel:
+    matrix: *sdx_wave2_devices
+
+sdx:wave2:upgrade:
+  extends: .sdx_upgrade_job
+  stage: sdx-wave2-upgrade
+  parallel:
+    matrix: *sdx_wave2_devices
+
+sdx:wave2:postcheck:
+  extends: .sdx_postcheck_job
+  stage: sdx-wave2-postcheck
+  parallel:
+    matrix: *sdx_wave2_devices
+
+sdx:wave2:promote:
+  extends: .sdx_promote_job
+  stage: sdx-wave2-gate
+
+# ---- Wave 3: production ----
+sdx:wave3:precheck:
+  extends: .sdx_precheck_job
+  stage: sdx-wave3-precheck
+  parallel:
+    matrix: *sdx_wave3_devices
+
+sdx:wave3:upgrade:
+  extends: .sdx_upgrade_job
+  stage: sdx-wave3-upgrade
+  parallel:
+    matrix: *sdx_wave3_devices
+
+sdx:wave3:postcheck:
+  extends: .sdx_postcheck_job
+  stage: sdx-wave3-postcheck
+  parallel:
+    matrix: *sdx_wave3_devices

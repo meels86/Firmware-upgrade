@@ -1,0 +1,67 @@
+# Staged NetScaler (Citrix ADC) firmware upgrade pipeline.
+#
+# Two independent paths, selected by the UPGRADE_TARGET variable when the
+# pipeline is run:
+#   - sdx: upgrades the SDX platform (Management Service / SVM) in waves.
+#   - vpx: upgrades VPX tenant instances in waves, including a running
+#          config save/capture/compare around the upgrade.
+#
+# See docs/PIPELINE.md for the full architecture, how to run it, and how
+# to extend the device inventory.
+
+variables:
+  ARTIFACT_DIR: "artifacts"
+  UPGRADE_TARGET:
+    value: "sdx"
+    options:
+      - "sdx"
+      - "vpx"
+    description: "Which NetScaler upgrade pipeline to run"
+  FIRMWARE_SOURCE:
+    value: "s3"
+    options:
+      - "s3"
+      - "smb"
+    description: "Where to fetch the firmware build from"
+  EXPECTED_SHA256:
+    value: ""
+    description: "Known-good SHA256 of the firmware build being deployed (optional but recommended)"
+  DISK_WARN_THRESHOLD_PCT: "80"
+  SNMP_COMMUNITY: "public"
+  SSH_STRICT_HOST_KEY_CHECKING: "no"
+  NS_SSH_USER: "nsroot"
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "api" || $CI_PIPELINE_SOURCE == "schedule"'
+
+stages:
+  - validate
+  - fetch-firmware
+  - sdx-wave1-precheck
+  - sdx-wave1-upgrade
+  - sdx-wave1-postcheck
+  - sdx-wave1-gate
+  - sdx-wave2-precheck
+  - sdx-wave2-upgrade
+  - sdx-wave2-postcheck
+  - sdx-wave2-gate
+  - sdx-wave3-precheck
+  - sdx-wave3-upgrade
+  - sdx-wave3-postcheck
+  - vpx-wave1-precheck
+  - vpx-wave1-upgrade
+  - vpx-wave1-postcheck
+  - vpx-wave1-gate
+  - vpx-wave2-precheck
+  - vpx-wave2-upgrade
+  - vpx-wave2-postcheck
+  - vpx-wave2-gate
+  - vpx-wave3-precheck
+  - vpx-wave3-upgrade
+  - vpx-wave3-postcheck
+
+include:
+  - local: ci/common.yml
+  - local: ci/sdx-pipeline.yml
+  - local: ci/vpx-pipeline.yml

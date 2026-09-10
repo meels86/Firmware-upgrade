@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Firmware-upgrade pipeline: downloaded builds and generated job artifacts
+firmware/
+artifacts/

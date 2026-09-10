@@ -1,0 +1,170 @@
+# VPX tenant upgrade pipeline: runs only when UPGRADE_TARGET == "vpx".
+#
+# Structurally the same wave/gate pattern as ci/sdx-pipeline.yml, with two
+# VPX-specific additions folded into the precheck/postcheck jobs: the
+# running configuration is saved and captured before the upgrade, and
+# compared against a post-upgrade capture afterwards (full diff +
+# consolidated differences-only summary). Power-supply checks are skipped
+# since VPX is virtual (PLATFORM=vpx).
+#
+# Device lists below must stay in sync with config/tenants.vpx.yml (the
+# human-readable inventory reference) - see the note in ci/sdx-pipeline.yml
+# about why parallel:matrix values are static here.
+
+.vpx_wave1_devices: &vpx_wave1_devices
+  - DEVICE_NAME: vpx-lab-01
+    MGMT_IP: "10.10.2.11"
+  - DEVICE_NAME: vpx-lab-02
+    MGMT_IP: "10.10.2.12"
+
+.vpx_wave2_devices: &vpx_wave2_devices
+  - DEVICE_NAME: vpx-dr-01
+    MGMT_IP: "10.20.2.11"
+
+.vpx_wave3_devices: &vpx_wave3_devices
+  - DEVICE_NAME: vpx-prod-01
+    MGMT_IP: "10.30.2.11"
+  - DEVICE_NAME: vpx-prod-02
+    MGMT_IP: "10.30.2.12"
+
+.vpx_base:
+  extends: .base
+  rules:
+    - if: '$UPGRADE_TARGET == "vpx"'
+  variables:
+    PLATFORM: "vpx"
+
+.vpx_precheck_job:
+  extends: .vpx_base
+  script:
+    - scripts/common/precheck.sh pre
+    - scripts/vpx/save_running_config.sh pre
+  artifacts:
+    paths:
+      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
+
+.vpx_upgrade_job:
+  extends: .vpx_base
+  cache:
+    key: "firmware-${CI_PIPELINE_ID}"
+    paths: [firmware/]
+    policy: pull
+  script:
+    - scripts/vpx/upgrade_vpx.sh firmware/build.tgz
+  artifacts:
+    paths:
+      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
+
+.vpx_postcheck_job:
+  extends: .vpx_base
+  script:
+    - |
+      set +e
+      scripts/common/precheck.sh post
+      POST_RC=$?
+      scripts/vpx/save_running_config.sh post
+      scripts/common/compare_checks.sh
+      COMPARE_RC=$?
+      scripts/vpx/compare_running_config.sh
+      CONFIG_DIFF_RC=$?
+      set -e
+      echo "postcheck rc=${POST_RC} health-compare rc=${COMPARE_RC} config-diff rc=${CONFIG_DIFF_RC} (config-diff is informational, see running-config.diff.* artifacts)"
+      [ "$POST_RC" -eq 0 ] && [ "$COMPARE_RC" -eq 0 ]
+  artifacts:
+    paths:
+      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
+
+.vpx_promote_job:
+  extends: .vpx_base
+  when: manual
+  allow_failure: false
+  script:
+    - echo "Promoting to the next VPX wave."
+
+vpx:validate:
+  extends: .vpx_base
+  stage: validate
+  script:
+    - test -f config/tenants.vpx.yml
+    - scripts/lib/validate_env.sh vpx
+
+vpx:fetch-firmware:
+  extends: .vpx_base
+  stage: fetch-firmware
+  cache:
+    key: "firmware-${CI_PIPELINE_ID}"
+    paths: [firmware/]
+    policy: push
+  script:
+    - mkdir -p firmware
+    - scripts/firmware/fetch_firmware.sh firmware/build.tgz
+    - scripts/firmware/verify_checksum.sh firmware/build.tgz "${EXPECTED_SHA256:-}"
+  artifacts:
+    expire_in: "7 days"
+    paths:
+      - firmware/build.tgz.sha256
+
+# ---- Wave 1: lab/canary ----
+vpx:wave1:precheck:
+  extends: .vpx_precheck_job
+  stage: vpx-wave1-precheck
+  parallel:
+    matrix: *vpx_wave1_devices
+
+vpx:wave1:upgrade:
+  extends: .vpx_upgrade_job
+  stage: vpx-wave1-upgrade
+  parallel:
+    matrix: *vpx_wave1_devices
+
+vpx:wave1:postcheck:
+  extends: .vpx_postcheck_job
+  stage: vpx-wave1-postcheck
+  parallel:
+    matrix: *vpx_wave1_devices
+
+vpx:wave1:promote:
+  extends: .vpx_promote_job
+  stage: vpx-wave1-gate
+
+# ---- Wave 2: DR site ----
+vpx:wave2:precheck:
+  extends: .vpx_precheck_job
+  stage: vpx-wave2-precheck
+  parallel:
+    matrix: *vpx_wave2_devices
+
+vpx:wave2:upgrade:
+  extends: .vpx_upgrade_job
+  stage: vpx-wave2-upgrade
+  parallel:
+    matrix: *vpx_wave2_devices
+
+vpx:wave2:postcheck:
+  extends: .vpx_postcheck_job
+  stage: vpx-wave2-postcheck
+  parallel:
+    matrix: *vpx_wave2_devices
+
+vpx:wave2:promote:
+  extends: .vpx_promote_job
+  stage: vpx-wave2-gate
+
+# ---- Wave 3: production ----
+vpx:wave3:precheck:
+  extends: .vpx_precheck_job
+  stage: vpx-wave3-precheck
+  parallel:
+    matrix: *vpx_wave3_devices
+
+vpx:wave3:upgrade:
+  extends: .vpx_upgrade_job
+  stage: vpx-wave3-upgrade
+  parallel:
+    matrix: *vpx_wave3_devices
+
+vpx:wave3:postcheck:
+  extends: .vpx_postcheck_job
+  stage: vpx-wave3-postcheck
+  parallel:
+    matrix: *vpx_wave3_devices

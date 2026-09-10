@@ -1,0 +1,30 @@
+# Human-readable inventory reference for the VPX upgrade pipeline.
+#
+# See the note in config/waves.sdx.yml - the device list actually used by
+# the pipeline lives as YAML anchors in ci/vpx-pipeline.yml and must be
+# kept in sync with this file.
+waves:
+  - name: wave1-lab
+    description: Lab / non-production VPX pair - upgraded first as a canary.
+    devices:
+      - name: vpx-lab-01
+        mgmt_ip: 10.10.2.11
+        parent_sdx: sdx-lab-01
+      - name: vpx-lab-02
+        mgmt_ip: 10.10.2.12
+        parent_sdx: sdx-lab-02
+  - name: wave2-dr
+    description: DR site VPX tenant.
+    devices:
+      - name: vpx-dr-01
+        mgmt_ip: 10.20.2.11
+        parent_sdx: sdx-dr-01
+  - name: wave3-prod
+    description: Primary production VPX tenants - upgraded last.
+    devices:
+      - name: vpx-prod-01
+        mgmt_ip: 10.30.2.11
+        parent_sdx: sdx-prod-01
+      - name: vpx-prod-02
+        mgmt_ip: 10.30.2.12
+        parent_sdx: sdx-prod-02

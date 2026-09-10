@@ -1,0 +1,31 @@
+# Human-readable inventory reference for the SDX upgrade pipeline.
+#
+# NOTE: GitLab CI `parallel:matrix` values must be static at pipeline
+# compile time, so the actual device list the pipeline runs against lives
+# as YAML anchors in ci/sdx-pipeline.yml (sdx_wave1_devices, etc). Keep
+# this file in sync with those anchors when you add/remove/rename
+# appliances - this is the place to look to understand *why* the fleet is
+# grouped the way it is. If the fleet grows large enough that hand-editing
+# both files becomes painful, see docs/PIPELINE.md for how to replace the
+# static matrices with a generated child pipeline driven directly by this
+# file.
+waves:
+  - name: wave1-lab
+    description: Lab / non-production SDX pair - upgraded first as a canary.
+    devices:
+      - name: sdx-lab-01
+        mgmt_ip: 10.10.1.11
+      - name: sdx-lab-02
+        mgmt_ip: 10.10.1.12
+  - name: wave2-dr
+    description: DR site SDX.
+    devices:
+      - name: sdx-dr-01
+        mgmt_ip: 10.20.1.11
+  - name: wave3-prod
+    description: Primary production SDX pair - upgraded last.
+    devices:
+      - name: sdx-prod-01
+        mgmt_ip: 10.30.1.11
+      - name: sdx-prod-02
+        mgmt_ip: 10.30.1.12
