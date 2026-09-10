@@ -218,5 +218,12 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Firmware-upgrade pipeline: downloaded builds and generated job artifacts
-firmware/
-artifacts/
+# (anchored to the repo root - do not use bare "firmware/"/"artifacts/",
+# which would also match scripts/firmware/)
+/firmware/
+/artifacts/
+
+# The generic "lib/" rule above (Python packaging boilerplate) would also
+# match scripts/lib/ - explicitly keep our helper scripts tracked.
+!/scripts/lib/
+!/scripts/lib/**
