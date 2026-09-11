@@ -1,0 +1,14 @@
+# Pure-Python toolchain for the pipeline - no system packages (no ssh,
+# scp, smbclient, or net-snmp binaries) are required.
+requests==2.32.3
+boto3==1.34.162
+smbprotocol==1.13.0
+smbclient==1.1.0
+# Pinned to the 4.x line deliberately: pysnmp 5/6 moved to an asyncio-based
+# API under different import paths (pysnmp.hlapi.v3arch.asyncio, etc).
+# scripts/checks/psu_check.py uses the synchronous pysnmp.hlapi API that
+# only exists on 4.x.
+pysnmp==4.4.12
+# pysnmp 4.4.x imports pyasn1.compat, which was removed in pyasn1>=0.5 -
+# pin explicitly or `pip install pysnmp` will pull a pyasn1 that breaks it.
+pyasn1==0.4.8

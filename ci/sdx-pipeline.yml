@@ -8,6 +8,10 @@
 # job blocks every later stage) and a human has clicked the manual
 # "promote" gate job for that wave.
 #
+# Every device interaction goes through the NITRO REST API
+# (scripts/common/upload_firmware.py, trigger_upgrade.py,
+# scripts/checks/health_check.py) - no SSH/SCP.
+#
 # Device lists below must stay in sync with config/waves.sdx.yml (the
 # human-readable inventory reference) - GitLab `parallel:matrix` values
 # must be static at pipeline-compile time, so they cannot be read from an
@@ -37,56 +41,12 @@
   variables:
     PLATFORM: "sdx"
 
-.sdx_precheck_job:
-  extends: .sdx_base
-  script:
-    - scripts/common/precheck.sh pre
-  artifacts:
-    paths:
-      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
-
-.sdx_upgrade_job:
-  extends: .sdx_base
-  cache:
-    key: "firmware-${CI_PIPELINE_ID}"
-    paths: [firmware/]
-    policy: pull
-  script:
-    - scripts/sdx/upload_firmware.sh firmware/build.tgz
-    - scripts/sdx/trigger_upgrade.sh
-  artifacts:
-    paths:
-      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
-
-.sdx_postcheck_job:
-  extends: .sdx_base
-  script:
-    - |
-      set +e
-      scripts/common/precheck.sh post
-      POST_RC=$?
-      scripts/common/compare_checks.sh
-      COMPARE_RC=$?
-      set -e
-      echo "postcheck rc=${POST_RC} compare rc=${COMPARE_RC}"
-      [ "$POST_RC" -eq 0 ] && [ "$COMPARE_RC" -eq 0 ]
-  artifacts:
-    paths:
-      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
-
-.sdx_promote_job:
-  extends: .sdx_base
-  when: manual
-  allow_failure: false
-  script:
-    - echo "Promoting to the next SDX wave."
-
 sdx:validate:
   extends: .sdx_base
   stage: validate
   script:
     - test -f config/waves.sdx.yml
-    - scripts/lib/validate_env.sh sdx
+    - python3 scripts/lib/validate_env.py sdx
 
 sdx:fetch-firmware:
   extends: .sdx_base
@@ -97,8 +57,8 @@ sdx:fetch-firmware:
     policy: push
   script:
     - mkdir -p firmware
-    - scripts/firmware/fetch_firmware.sh firmware/build.tgz
-    - scripts/firmware/verify_checksum.sh firmware/build.tgz "${EXPECTED_SHA256:-}"
+    - python3 scripts/firmware/fetch_firmware.py firmware/build.tgz
+    - python3 scripts/firmware/verify_checksum.py firmware/build.tgz
   artifacts:
     expire_in: "7 days"
     paths:
@@ -106,65 +66,65 @@ sdx:fetch-firmware:
 
 # ---- Wave 1: lab/canary ----
 sdx:wave1:precheck:
-  extends: .sdx_precheck_job
+  extends: [".sdx_base", ".precheck_job"]
   stage: sdx-wave1-precheck
   parallel:
     matrix: *sdx_wave1_devices
 
 sdx:wave1:upgrade:
-  extends: .sdx_upgrade_job
+  extends: [".sdx_base", ".upgrade_job"]
   stage: sdx-wave1-upgrade
   parallel:
     matrix: *sdx_wave1_devices
 
 sdx:wave1:postcheck:
-  extends: .sdx_postcheck_job
+  extends: [".sdx_base", ".postcheck_job"]
   stage: sdx-wave1-postcheck
   parallel:
     matrix: *sdx_wave1_devices
 
 sdx:wave1:promote:
-  extends: .sdx_promote_job
+  extends: [".sdx_base", ".promote_job"]
   stage: sdx-wave1-gate
 
 # ---- Wave 2: DR site ----
 sdx:wave2:precheck:
-  extends: .sdx_precheck_job
+  extends: [".sdx_base", ".precheck_job"]
   stage: sdx-wave2-precheck
   parallel:
     matrix: *sdx_wave2_devices
 
 sdx:wave2:upgrade:
-  extends: .sdx_upgrade_job
+  extends: [".sdx_base", ".upgrade_job"]
   stage: sdx-wave2-upgrade
   parallel:
     matrix: *sdx_wave2_devices
 
 sdx:wave2:postcheck:
-  extends: .sdx_postcheck_job
+  extends: [".sdx_base", ".postcheck_job"]
   stage: sdx-wave2-postcheck
   parallel:
     matrix: *sdx_wave2_devices
 
 sdx:wave2:promote:
-  extends: .sdx_promote_job
+  extends: [".sdx_base", ".promote_job"]
   stage: sdx-wave2-gate
 
 # ---- Wave 3: production ----
 sdx:wave3:precheck:
-  extends: .sdx_precheck_job
+  extends: [".sdx_base", ".precheck_job"]
   stage: sdx-wave3-precheck
   parallel:
     matrix: *sdx_wave3_devices
 
 sdx:wave3:upgrade:
-  extends: .sdx_upgrade_job
+  extends: [".sdx_base", ".upgrade_job"]
   stage: sdx-wave3-upgrade
   parallel:
     matrix: *sdx_wave3_devices
 
 sdx:wave3:postcheck:
-  extends: .sdx_postcheck_job
+  extends: [".sdx_base", ".postcheck_job"]
   stage: sdx-wave3-postcheck
   parallel:
     matrix: *sdx_wave3_devices

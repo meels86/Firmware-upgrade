@@ -1,18 +1,63 @@
-# Shared job template for both the SDX and VPX pipelines.
+# Shared job templates for both the SDX and VPX pipelines.
 #
-# Uses a stock python:3.12-slim image and installs the small set of CLI
-# tools needed (ssh/scp, smbclient, snmp, jq) on every job. If pipeline
-# start-up time becomes a problem, build docker/tooling.Dockerfile once,
-# push it to your project's container registry, and point `.base.image`
-# at it instead - see docs/PIPELINE.md.
+# The whole toolchain is pure Python hitting the NITRO REST API over
+# HTTPS (plus SNMP for the SDX power-supply check) - no ssh/scp/smbclient
+# system packages are needed, just `pip install -r requirements.txt`.
 .base:
   image: python:3.12-slim
+  variables:
+    PYTHONPATH: "${CI_PROJECT_DIR}/scripts"
   before_script:
-    - apt-get update -qq
-    - apt-get install -y -qq --no-install-recommends openssh-client sshpass smbclient snmp jq curl ca-certificates >/dev/null
-    - pip install --quiet --disable-pip-version-check boto3
-    - find scripts -name '*.sh' -exec chmod +x {} +
+    - pip install --quiet --disable-pip-version-check -r requirements.txt
     - mkdir -p "${ARTIFACT_DIR}"
   artifacts:
     when: always
     expire_in: "90 days"
+
+# Precheck/postcheck/upgrade job bodies shared by both platforms - SDX
+# uses these directly; VPX extends them with its own precheck/postcheck
+# that additionally saves/compares the running configuration (see
+# ci/vpx-pipeline.yml).
+.precheck_job:
+  extends: .base
+  script:
+    - python3 scripts/checks/health_check.py pre
+  artifacts:
+    paths:
+      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
+
+.upgrade_job:
+  extends: .base
+  cache:
+    key: "firmware-${CI_PIPELINE_ID}"
+    paths: [firmware/]
+    policy: pull
+  script:
+    - python3 scripts/common/upload_firmware.py firmware/build.tgz
+    - python3 scripts/common/trigger_upgrade.py
+  artifacts:
+    paths:
+      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
+
+.postcheck_job:
+  extends: .base
+  script:
+    - |
+      set +e
+      python3 scripts/checks/health_check.py post
+      POST_RC=$?
+      python3 scripts/checks/compare_checks.py
+      COMPARE_RC=$?
+      set -e
+      echo "postcheck rc=${POST_RC} compare rc=${COMPARE_RC}"
+      [ "$POST_RC" -eq 0 ] && [ "$COMPARE_RC" -eq 0 ]
+  artifacts:
+    paths:
+      - "${ARTIFACT_DIR}/${DEVICE_NAME}/"
+
+.promote_job:
+  extends: .base
+  when: manual
+  allow_failure: false
+  script:
+    - echo "Promoting to the next wave."

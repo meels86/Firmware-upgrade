@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Compare pre- and post-upgrade NetScaler health-check reports and produce
-a pass/fail verdict plus a human-readable summary."""
+"""compare_checks.py
+
+Compares this device's health-pre.json and health-post.json artifacts and
+writes health-compare.{json,md}. Reads DEVICE_NAME and ARTIFACT_DIR from
+the environment.
+"""
+from __future__ import annotations
+
 import json
+import os
 import sys
+from pathlib import Path
+
+from lib.common import require_env
 
 OK_STATUSES = {"PASS", "SKIPPED"}
 
@@ -39,31 +49,26 @@ def compare(pre: dict, post: dict) -> dict:
     }
 
 
-def main() -> None:
-    pre_file, post_file, out_file = sys.argv[1:4]
-    with open(pre_file) as fh:
-        pre = json.load(fh)
-    with open(post_file) as fh:
-        post = json.load(fh)
+def main() -> int:
+    env = require_env("DEVICE_NAME")
+    out_dir = Path(os.environ.get("ARTIFACT_DIR", "artifacts")) / env["DEVICE_NAME"]
+
+    pre = json.loads((out_dir / "health-pre.json").read_text())
+    post = json.loads((out_dir / "health-post.json").read_text())
 
     comparison = compare(pre, post)
-    comparison["pre_file"] = pre_file
-    comparison["post_file"] = post_file
-
-    with open(out_file, "w") as fh:
-        json.dump(comparison, fh, indent=2)
+    (out_dir / "health-compare.json").write_text(json.dumps(comparison, indent=2))
 
     lines = [f"# Health check comparison ({comparison['result']})", ""]
     if comparison["findings"]:
         lines += ["## Findings", ""] + [f"- {f}" for f in comparison["findings"]]
     else:
         lines += ["All pre/post health checks match or improved. No regressions detected."]
-    with open(out_file.rsplit(".", 1)[0] + ".md", "w") as fh:
-        fh.write("\n".join(lines) + "\n")
+    (out_dir / "health-compare.md").write_text("\n".join(lines) + "\n")
 
     print(json.dumps(comparison, indent=2))
-    sys.exit(0 if comparison["result"] == "PASS" else 1)
+    return 0 if comparison["result"] == "PASS" else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

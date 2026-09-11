@@ -28,8 +28,7 @@ variables:
     description: "Known-good SHA256 of the firmware build being deployed (optional but recommended)"
   DISK_WARN_THRESHOLD_PCT: "80"
   SNMP_COMMUNITY: "public"
-  SSH_STRICT_HOST_KEY_CHECKING: "no"
-  NS_SSH_USER: "nsroot"
+  NS_API_VERIFY_SSL: "false"
 
 workflow:
   rules:

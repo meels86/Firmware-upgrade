@@ -6,13 +6,21 @@ Two independent GitLab CI paths for staged Citrix ADC/NetScaler upgrades:
 - **VPX** - upgrades VPX tenant instances, plus saves/compares the running
   configuration around the upgrade.
 
+Every script is Python, and every device interaction goes through the
+**NITRO REST API** over HTTPS (plus one read-only SNMP GET for the SDX
+power-supply check) - there is no SSH, SCP, or CLI command execution
+against the appliances anywhere in this pipeline. See
+`scripts/lib/nitro_client.py` for the API client and
+`docs/citrix-api-notes.md` for which NITRO calls are well documented and
+which need confirming against your firmware version.
+
 Both paths share the same shape: fetch + checksum the firmware once, then
 roll it out in **waves** (canary -> DR -> production). Each wave:
 
 1. **Precheck** - disk space, interface up/up, power supply health (SDX
    only) captured to a JSON artifact. VPX also captures the running config.
 2. **Upgrade** - uploads the firmware to each device in the wave (in
-   parallel) and triggers the upgrade.
+   parallel) via the NITRO `systemfile` resource and triggers the upgrade.
 3. **Postcheck** - re-runs the same checks, produces a pre/post
    **compare** artifact, and (VPX only) diffs the running config.
 4. **Gate** - a manual "promote" job that must be clicked before the next
@@ -36,12 +44,16 @@ deliberately.
 
 Required CI/CD variables (credentials, share/bucket details) are listed in
 `config/pipeline.env.example`. Mark every secret as **Masked** and
-**Protected** in Settings > CI/CD > Variables, and prefer an SSH key (a
-GitLab "File" type variable, `NS_SSH_PRIVATE_KEY_FILE`) over a password.
+**Protected** in Settings > CI/CD > Variables. `NS_API_USERNAME` /
+`NS_API_PASSWORD` authenticate to the NITRO API on both the SDX SVM and
+VPX instances (stateless per-request headers - see
+`scripts/lib/nitro_client.py`).
 
 ## Firmware source: S3 vs. a Windows share
 
-Both are implemented; pick with `FIRMWARE_SOURCE`. As a rule of thumb:
+Both are implemented, in pure Python (boto3 for S3, the `smbclient`
+package for SMB - no external CLI tools); pick with `FIRMWARE_SOURCE`. As
+a rule of thumb:
 
 - **S3** is the better default when your runners have outbound access to
   AWS - it gives you versioning, IAM-scoped access, and no dependency on
@@ -75,10 +87,11 @@ straightforward to read and adapt.
 Every job writes into `artifacts/<device-name>/`, kept for 90 days:
 
 - `health-pre.json` / `health-post.json` - disk, interface, and (SDX)
-  power-supply results.
+  power-supply results, pulled directly from NITRO as structured JSON.
 - `health-compare.json` / `.md` - pass/fail verdict and findings.
-- `upload-checksum.json` - local vs. remote SHA256 for the firmware
-  transfer.
+- `upload-checksum.json` - local SHA256 and local-vs-remote file size for
+  the firmware transfer (see "No remote checksum verification" in
+  `docs/citrix-api-notes.md` for why this isn't a remote SHA256 compare).
 - VPX only: `running-config.pre.txt`, `running-config.post.txt`,
   `running-config.diff.full.txt` (full unified diff), and
   `running-config.diff.summary.txt` (consolidated - only lines actually
@@ -90,18 +103,37 @@ to byte-for-byte); it's surfaced as an artifact for review. Health-check
 regressions (e.g., an interface that was up going down) do fail the job and
 block promotion to the next wave.
 
-## Speeding up the pipeline
+## Project layout
 
-Each job installs its CLI tools (`ssh`, `smbclient`, `jq`, `snmp`) via
-`apt-get` in `before_script`, which is slow when repeated across many
-matrix jobs. Build `docker/tooling.Dockerfile` once, push it to your
-project's container registry, and point `.base.image` in `ci/common.yml`
-at it (then drop the `apt-get`/`pip install` lines).
+```
+scripts/
+  lib/            # NitroClient (the only thing that talks to appliances),
+                   # logging/env helpers, validate_env.py
+  firmware/       # fetch from S3 (boto3) or SMB (smbclient), checksum
+  checks/         # disk/interface/psu checks (NITRO + SNMP), compare
+  common/         # upload_firmware.py + trigger_upgrade.py - shared by
+                   # both SDX and VPX, since both go through the same
+                   # NITRO systemfile-upload-then-upgrade-action pattern
+  vpx/            # running-config save/compare (VPX-only)
+```
 
-## Important: confirm vendor-specific commands for your firmware version
+Every script reads its target device from `DEVICE_NAME`/`MGMT_IP`/
+`PLATFORM` (set per-job by the CI `parallel:matrix`) rather than taking
+them as arguments, so the same script works unmodified for any device in
+any wave. Run one locally with, e.g.:
+
+```
+export PYTHONPATH="$(pwd)/scripts"
+export DEVICE_NAME=sdx-lab-01 MGMT_IP=10.10.1.11 PLATFORM=sdx
+export NS_API_USERNAME=nsroot NS_API_PASSWORD=...
+python3 scripts/checks/health_check.py pre
+```
+
+## Important: confirm vendor-specific NITRO calls for your firmware version
 
 This pipeline is a working scaffold, not a turnkey solution - a few of the
-device interactions are version- and platform-specific enough that they
-should be validated against your actual NetScaler firmware version before
-running anything beyond a lab appliance. See `docs/citrix-api-notes.md` for
-exactly which calls to check and why.
+NITRO calls are version- and platform-specific enough that they should be
+validated against your actual NetScaler firmware version before running
+anything beyond a lab appliance. See `docs/citrix-api-notes.md` for
+exactly which calls to check and why - most notably the upgrade-trigger
+action itself.
